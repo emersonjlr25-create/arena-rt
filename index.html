@@ -277,7 +277,7 @@ function pintar(){
  let hoje=0;D.negociadores.forEach(n=>{const g=G[n.nome],s=V.neg[n.nome];g.querySelector('.a').textContent=s.a;g.querySelector('.g').textContent=s.g;hoje+=s.a;});
  D.series.forEach(s=>{const ms=D.negociadores.filter(n=>n.serie===s.chave);SER[s.chave].querySelector('.sd').textContent=ms.reduce((a,n)=>a+V.neg[n.nome].a,0);SER[s.chave].querySelector('.sc').textContent=ms.reduce((a,n)=>a+V.neg[n.nome].g,0);});
  let gan=0;D.negociadores.forEach(n=>gan+=V.neg[n.nome].g);$('hoje').textContent=hoje;$('ganhos').textContent=gan;
- $('vidaInfo').innerHTML=(proxTxt?'PRÓXIMO ATAQUE EM <b id="prox">'+proxTxt+'</b> · ':'')+Math.round(V.vb/Math.max(1,V.tot)*100)+'% DE VIDA';
+ $('vidaInfo').innerHTML=(proxTxt?proxTxt+' · ':'')+Math.round(V.vb/Math.max(1,V.tot)*100)+'% DE VIDA';
 }
 let META=D.meta_diaria||20,proxTxt='';
 const SERIE={};D.negociadores.forEach(n=>SERIE[n.nome]=D.series.find(s=>s.chave===n.serie));
@@ -323,32 +323,42 @@ setTimeout(()=>ameaca(pega(FALAS)),8000);
 function lerVistos(dia){try{const o=JSON.parse(localStorage.getItem('arena_rt_vistos')||'null');return o&&o.dia===dia?new Set(o.ids):null;}catch(_){return MEM&&MEM.dia===dia?new Set(MEM.ids):null;}}
 let MEM=null;
 function gravaVistos(dia,ids){MEM={dia,ids:[...ids]};try{localStorage.setItem('arena_rt_vistos',JSON.stringify(MEM));}catch(_){}}
-const TESTE=location.hash==='#teste',CICLO=TESTE?30000:27*60*1000,MIN=TESTE?9000:30*1000;
-let R0=null,FILA=[],vistos=new Set(),dia=null,chegada=0,proxAt=0,ultimo=null;
+const TESTE=location.hash==='#teste',GAP=TESTE?6000:20000,INICIO=TESTE?2000:5000;
+let R0=null,FILA=[],vistos=new Set(),dia=null,proxAt=0,ultimo=null;
 function montaEstado(){montaClientes(R0.clientes);V.cli={};R0.clientes.forEach(c=>V.cli[c.nome]={v:c.backlog,t:c.total});
  D.negociadores.forEach(n=>{const x=(R0.negociadores||{})[n.nome]||{a:0,g:0};V.neg[n.nome]={a:x.a,g:x.g};});
  FILA.forEach(e=>aplicaEvento(e,-1));$('base').textContent='ATUALIZADO '+(R0.atualizado||'');pintar();}
-function agenda(){if(!FILA.length){proxAt=0;return;}
- if(!proxAt){const resto=Math.max(MIN,(chegada+CICLO-Date.now())/FILA.length);proxAt=Date.now()+Math.min(10000,resto);}}
 function aplica(R){
- if(!R)return;const chave=R.atualizado+'|'+R.eventos.length;if(chave===ultimo)return;ultimo=chave;
+ if(!R)return;const chave=R.atualizado+'|'+R.eventos.length+'|'+((R.repetir||{}).token||'');if(chave===ultimo)return;ultimo=chave;
  if(R.data!==dia){dia=R.data;FILA=[];const v=lerVistos(dia);
   if(v)vistos=v;else{vistos=new Set(R.eventos.map(e=>e.id));gravaVistos(dia,vistos);} }
  const naFila=new Set(FILA.map(e=>e.id));
- const novos=R.eventos.filter(e=>!vistos.has(e.id)&&!naFila.has(e.id));
- if(novos.length){FILA=FILA.concat(novos);chegada=Date.now();}
- R0=R;if(!emTurno)montaEstado();agenda();
+ let novos=R.eventos.filter(e=>!vistos.has(e.id)&&!naFila.has(e.id));
+ // repetição pedida pelo supervisor (uma vez por token)
+ if(R.repetir&&R.repetir.token){let rep=null;try{rep=localStorage.getItem('arena_rt_rep');}catch(_){}
+  if(rep!==R.repetir.token){try{localStorage.setItem('arena_rt_rep',R.repetir.token);}catch(_){}
+   const ids=new Set(R.repetir.ids);novos=R.eventos.filter(e=>ids.has(e.id)&&!naFila.has(e.id)).concat(novos.filter(e=>!ids.has(e.id)));}}
+ if(novos.length){FILA=FILA.concat(novos);if(!proxAt)proxAt=Date.now()+INICIO;}
+ R0=R;if(!emTurno)montaEstado();
 }
+// horário da próxima rodada (seg a sex, 08:30 a 19:30, a cada 30 min, +4 min de publicação)
+function proximaRodada(){const n=new Date(),d=new Date(n);d.setSeconds(0,0);
+ for(let i=0;i<14*48;i++){const m=d.getMinutes();d.setMinutes(m<30?30:60);const h=d.getHours()+d.getMinutes()/60,w=d.getDay();
+  if(w>=1&&w<=5&&h>=8.5&&h<=19.5){const c=new Date(d.getTime()+4*60000);if(c>n)return d;}}
+ return null;}
 async function tick(){
  if(!emTurno&&FILA.length&&proxAt&&Date.now()>=proxAt){
   emTurno=true;proxTxt='';const e=FILA[0];
   try{await turno(e);}catch(_){}
   FILA.shift();vistos.add(e.id);gravaVistos(dia,vistos);emTurno=false;
-  proxAt=FILA.length?Date.now()+Math.max(MIN,(chegada+CICLO-Date.now())/FILA.length):0;
+  proxAt=FILA.length?Date.now()+GAP:0;
   if(R0)montaEstado();
  }
- if(!emTurno){const r=proxAt?Math.max(0,Math.ceil((proxAt-Date.now())/1000)):-1;
-  const nt=r<0?'':Math.floor(r/60)+':'+String(r%60).padStart(2,'0');if(nt!==proxTxt){proxTxt=nt;pintar();}}
+ if(!emTurno){let nt='';
+  if(proxAt){const r=Math.max(0,Math.ceil((proxAt-Date.now())/1000));nt='PRÓXIMO ATAQUE EM <b>'+Math.floor(r/60)+':'+String(r%60).padStart(2,'0')+'</b>';}
+  else{const d=proximaRodada();if(d){const hoje=d.toDateString()===new Date().toDateString();
+   nt='PRÓXIMA RODADA DE ATAQUES '+(hoje?'ÀS':(d.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','').toUpperCase()+' ÀS'))+' <b>'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+'</b>';}}
+  if(nt!==proxTxt){proxTxt=nt;pintar();}}
 }
 setInterval(tick,1000);
 function carregar(){const s=document.createElement('script');s.src='dados_rt.js?t='+Date.now();s.onload=()=>{aplica(window.DADOS_RT);s.remove();};s.onerror=()=>s.remove();document.head.appendChild(s);}
